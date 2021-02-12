@@ -1,136 +1,161 @@
-from typing import Dict, Any, List
-
-import itertools
+import logging
+import pickle
 import numpy as np
-import sklearn
-from gensim.corpora import Dictionary
-from gensim.models import Word2Vec, TfidfModel
+from gensim.models.word2vec import Word2Vec
+from tqdm import tqdm
 from sklearn.mixture import GaussianMixture
+from sklearn.feature_extraction.text import TfidfVectorizer
 
 
-class SCDV(object):
-    """ This is a model which is described in "SCDV : Sparse Composite Document Vectors using soft clustering over distributional representations"
-    See https://arxiv.org/pdf/1612.06778.pdf for details
-    
-    """
+def build_word2vec(sentences, embedding_dim, min_count, window_size, sg):
+    logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
+    # モデルを作る
+    model = Word2Vec(sentences, size=embedding_dim, min_count=min_count, window=window_size, sg=sg)
+    return model
 
-    def __init__(self, documents: List[List[str]], embedding_size: int, cluster_size: int, sparsity_percentage: float,
-                 word2vec_parameters: Dict[Any, Any], gaussian_mixture_parameters: Dict[Any, Any],
-                 dictionary_filter_parameters: Dict[Any, Any]) -> None:
+
+class SparseCompositeDocumentVectors:
+    def __init__(self, model, num_clusters, embedding_dim, pname1, pname2):
+        self.min_no = 0
+        self.max_no = 0
+        self.prob_wordvecs = {}
+        self.model = model
+        self.word_vectors = model.wv.syn0
+        self.num_clusters = num_clusters
+        self.num_features = embedding_dim
+        self.pname1 = pname1
+        self.pname2 = pname2
+
+    def cluster_GMM(self):
+        # Initalize a GMM object and use it for clustering.
+        clf = GaussianMixture(
+            n_components=self.num_clusters,
+            covariance_type="tied",
+            init_params="kmeans",
+            max_iter=50
+        )
+        # Get cluster assignments.
+        clf.fit(self.word_vectors)
+        idx = clf.predict(self.word_vectors)
+        print("Clustering Done...")
+        # Get probabilities of cluster assignments.
+        idx_proba = clf.predict_proba(self.word_vectors)
+        # Dump cluster assignments and probability of cluster assignments.
+        pickle.dump(idx, open(self.pname1, "wb"))
+        print("Cluster Assignments Saved...")
+        pickle.dump(idx_proba, open(self.pname2, "wb"))
+        print("Probabilities of Cluster Assignments saved...")
+        return (idx, idx_proba)
+
+    def read_GMM(self):
+        # Loads cluster assignments and probability of cluster assignments.
+        idx = pickle.load(open(self.idx_name, "rb"))
+        idx_proba = pickle.load(open(self.idx_proba_name, "rb"))
+        print("Cluster Model Loaded...")
+        return (idx, idx_proba)
+
+    def get_probability_word_vectors(self, corpus):
         """
-        
-        :param documents: documents for training.
-        :param embedding_size: word embedding size.
-        :param cluster_size:  word cluster size.
-        :param sparsity_percentage: sparsity percentage. This must be in [0, 1].
-        :param word2vec_parameters: parameters to build `gensim.models.Word2Vec`. Please see `gensim.models.Word2Vec.__init__` for details.
-        :param gaussian_mixture_parameters: parameters to build `sklearn.mixture.GaussianMixture`. Please see `sklearn.mixture.GaussianMixture.__init__` for details.
-        :param dictionary_filter_parameters: parameters for `gensim.corpora.Dictionary.filter_extremes`. Please see `gensim.corpora.Dictionary.filter_extremes` for details.
+        corpus: list of lists of tokens
         """
-        self._dictionary = self._build_dictionary(documents, dictionary_filter_parameters)
-        vocabulary_size = len(self._dictionary.token2id)
+        # This function computes probability word-cluster vectors.
+        idx, idx_proba = self.cluster_GMM()
 
-        self._word_embeddings = self._build_word_embeddings(documents, self._dictionary, embedding_size,
-                                                            word2vec_parameters)
-        assert self._word_embeddings.shape == (vocabulary_size, embedding_size)
+        # Create a Word / Index dictionary, mapping each vocabulary word
+        # to a cluster number
+        word_centroid_map = dict(zip(self.model.wv.index2word, idx))
+        # Create Word / Probability of cluster assignment dictionary, mapping
+        # each vocabulary word to list of probabilities of cluster assignments.
+        word_centroid_prob_map = dict(zip(self.model.wv.index2word, idx_proba))
 
-        self._word_cluster_probabilities = self._build_word_cluster_probabilities(self._word_embeddings, cluster_size,
-                                                                                  gaussian_mixture_parameters)
-        assert self._word_cluster_probabilities.shape == (vocabulary_size, cluster_size)
+        # Comoputing tf-idf values
+        tfv = TfidfVectorizer(dtype=np.float32)
+        # transform corpus to get tfidf value
+        corpus = [" ".join(data) for data in corpus]
+        tfidfmatrix_traindata = tfv.fit_transform(corpus)
+        featurenames = tfv.get_feature_names()
+        idf = tfv._tfidf.idf_
+        # Creating a dictionary with word mapped to its idf value
+        print("Creating word-idf dictionary for dataset...")
+        word_idf_dict = {}
+        for pair in zip(featurenames, idf):
+            word_idf_dict[pair[0]] = pair[1]
 
-        self._idf = self._build_idf(documents, self._dictionary)
-        assert self._idf.shape == (vocabulary_size, )
+        for word in word_centroid_map:
+            self.prob_wordvecs[word] = np.zeros(self.num_clusters * self.num_features, dtype="float32")
+            for index in range(self.num_clusters):
+                try:
+                    self.prob_wordvecs[word][index*self.num_features:(index+1)*self.num_features] = \
+                        self.model[word] * word_centroid_prob_map[word][index] * word_idf_dict[word]
+                except:
+                    continue
+        self.word_centroid_map = word_centroid_map
 
-        word_cluster_vectors = self._build_word_cluster_vectors(self._word_embeddings, self._word_cluster_probabilities)
-        assert word_cluster_vectors.shape == (vocabulary_size, cluster_size, embedding_size)
+    def create_cluster_vector_and_gwbowv(self, tokens, flag):
+        # This function computes SDV feature vectors.
+        bag_of_centroids = np.zeros(self.num_clusters * self.num_features, dtype="float32")
+        for token in tokens:
+            try:
+                temp = self.word_centroid_map[token]
+            except:
+                continue
+            bag_of_centroids += self.prob_wordvecs[token]
+        norm = np.sqrt(np.einsum('...i,...i', bag_of_centroids, bag_of_centroids))
+        if norm != 0:
+            bag_of_centroids /= norm
+        # To make feature vector sparse, make note of minimum and maximum values.
+        if flag:
+            self.min_no += min(bag_of_centroids)
+            self.max_no += max(bag_of_centroids)
+        return bag_of_centroids
 
-        word_topic_vectors = self._build_word_topic_vectors(self._idf, word_cluster_vectors)
-        assert word_topic_vectors.shape == (vocabulary_size, (cluster_size * embedding_size))
+    def plain_word2vec_document_vectors(self, tokens):
+        bag_of_centroids = np.zeros(self.num_features, dtype="float32")
+        for token in tokens:
+            try:
+                temp = self.model[token]
+            except:
+                continue
+            bag_of_centroids += temp
 
-        document_vectors = self._build_document_vectors(word_topic_vectors, self._dictionary, documents)
-        assert document_vectors.shape == (len(documents), cluster_size * embedding_size)
+        bag_of_centroids = bag_of_centroids / len(tokens)
+        return bag_of_centroids
 
-        self._sparse_threshold = self._build_sparsity_threshold(document_vectors, sparsity_percentage)
+    def make_gwbowv(self, corpus, train=True):
+        # gwbowv is a matrix which contains normalized document vectors.
+        gwbowv = np.zeros((len(corpus), self.num_clusters*self.num_features)).astype(np.float32)
+        cnt = 0
+        for tokens in tqdm(corpus):
+            gwbowv[cnt] = self.create_cluster_vector_and_gwbowv(tokens, train)
+            cnt += 1
+        return gwbowv
 
-    def infer_vector(self, new_documents: List[List[str]], l2_normalize: bool = True) -> np.ndarray:
-        word_cluster_vectors = self._build_word_cluster_vectors(self._word_embeddings, self._word_cluster_probabilities)
-        word_topic_vectors = self._build_word_topic_vectors(self._idf, word_cluster_vectors)
-        document_vectors = self._build_document_vectors(word_topic_vectors, self._dictionary, new_documents)
-        return self._build_scdv_vectors(document_vectors, self._sparse_threshold, l2_normalize)
+    def make_word2vec(self, corpus, model):
+        self.model = model
+        w2docv = np.zeros((len(corpus), self.num_features)).astype(np.float32)
+        cnt = 0
+        for tokens in tqdm(corpus):
+            w2docv[cnt] = self.plain_word2vec_document_vectors(tokens)
+            cnt += 1
+        return w2docv
 
-    @staticmethod
-    def _build_dictionary(documents: List[List[str]], filter_parameters: Dict[Any, Any]) -> Dictionary:
-        d = Dictionary(documents)
-        d.filter_extremes(**filter_parameters)
-        return d
+    def get_word2vec_document_vector(self, tokens):
+        # tokens: list of tokens
+        return self.plain_word2vec_document_vectors(tokens)
 
-    @staticmethod
-    def _build_word_embeddings(documents: List[List[str]], dictionary: Dictionary, embedding_size: int,
-                               word2vec_parameters: Dict[Any, Any]) -> np.ndarray:
-        w2v = Word2Vec(documents, size=embedding_size, **word2vec_parameters)
-        embeddings = np.zeros((len(dictionary.token2id), w2v.vector_size))
-        for token, idx in dictionary.token2id.items():
-            embeddings[idx] = w2v.wv[token]
-        return embeddings
+    def dump_gwbowv(self, gwbowv, path="gwbowv_matrix.npy", percentage=0.04):
+        # Set the threshold percentage for making it sparse.
+        min_no = self.min_no*1.0/gwbowv.shape[0]
+        max_no = self.max_no*1.0/gwbowv.shape[0]
+        print("Average min: ", min_no)
+        print("Average max: ", max_no)
+        thres = (abs(max_no) + abs(min_no))/2
+        thres = thres * percentage
+        # Make values of matrices which are less than threshold to zero.
+        temp = abs(gwbowv) < thres
+        gwbowv[temp] = 0
+        np.save(path, gwbowv)
+        print("SDV created and dumped...")
 
-    @staticmethod
-    def _build_word_cluster_probabilities(word_embeddings: np.ndarray, cluster_size: int,
-                                          gaussian_mixture_parameters: Dict[Any, Any]) -> np.ndarray:
-        gm = GaussianMixture(n_components=cluster_size, **gaussian_mixture_parameters)
-        gm.fit(word_embeddings)
-        return gm.predict_proba(word_embeddings)
-
-    @staticmethod
-    def _build_idf(documents: List[List[str]], dictionary: Dictionary) -> np.ndarray:
-        corpus = [dictionary.doc2bow(doc) for doc in documents]
-        model = TfidfModel(corpus=corpus, dictionary=dictionary)
-        idf = np.zeros(len(dictionary.token2id))
-        for idx, value in model.idfs.items():
-            idf[idx] = value
-        return idf
-
-    @staticmethod
-    def _build_word_cluster_vectors(word_embeddings: np.ndarray, word_cluster_probabilities: np.ndarray) -> np.ndarray:
-        vocabulary_size, embedding_size = word_embeddings.shape
-        cluster_size = word_cluster_probabilities.shape[1]
-        assert vocabulary_size == word_cluster_probabilities.shape[0]
-
-        wcv = np.zeros((vocabulary_size, cluster_size, embedding_size))
-        wcp = word_cluster_probabilities
-        for v, c in itertools.product(range(vocabulary_size), range(cluster_size)):
-            wcv[v][c] = wcp[v][c] * word_embeddings[v]
-        return wcv
-
-    @staticmethod
-    def _build_word_topic_vectors(idf: np.ndarray, word_cluster_vectors: np.ndarray) -> np.ndarray:
-        vocabulary_size, cluster_size, embedding_size = word_cluster_vectors.shape
-        assert vocabulary_size == idf.shape[0]
-
-        wtv = np.zeros((vocabulary_size, cluster_size * embedding_size))
-        for v in range(vocabulary_size):
-            wtv[v] = idf[v] * word_cluster_vectors[v].flatten()
-        return wtv
-
-    @staticmethod
-    def _build_document_vectors(word_topic_vectors: np.ndarray, dictionary: Dictionary,
-                                documents: List[List[str]]) -> np.ndarray:
-        return np.array([
-            np.sum([word_topic_vectors[idx] * count for idx, count in dictionary.doc2bow(d)], axis=0) for d in documents
-        ])
-
-    @staticmethod
-    def _build_sparsity_threshold(document_vectors: np.ndarray, sparsity_percentage) -> float:
-        def _abs_average_max(m: np.ndarray) -> float:
-            return np.abs(np.average(np.max(m, axis=1)))
-
-        t = 0.5 * (_abs_average_max(document_vectors) + _abs_average_max(-document_vectors))
-        return sparsity_percentage * t
-
-    @staticmethod
-    def _build_scdv_vectors(document_vectors: np.ndarray, sparsity_threshold: float, l2_normalize: bool) -> np.ndarray:
-        close_to_zero = np.abs(document_vectors) < sparsity_threshold
-        document_vectors[close_to_zero] = 0.0
-        if not l2_normalize:
-            return document_vectors
-
-        return sklearn.preprocessing.normalize(document_vectors, axis=1, norm='l2')
+    def load_matrix(self, name):
+        return np.load(name)
