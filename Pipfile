@@ -10,7 +10,7 @@ gensim = "*"
 pylint = "*"
 tqdm = "*"
 numpy = "*"
-scikit-learn = "*"
+scikit-learn = "0.22.2.post1"
 mecab-python3 = "*"
 flask = "*"
 

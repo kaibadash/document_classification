@@ -3,13 +3,16 @@ import os
 import pickle
 import MeCab
 from scdv import SparseCompositeDocumentVectors, build_word2vec
+import const
+
+# 学習済みモデルからdocument vectorを生成するテスト
 
 tagger = MeCab.Tagger('-Owakati')
 model = pickle.load(open("model/model.pkl", "rb"))
 scdv = SparseCompositeDocumentVectors(
     model,
-    2,
-    100,
+    const.CLUSTER_NUM,
+    const.VECTOR_NUM,
     "model/gmm_cluster.pkl",
     "model/gmm_prob_cluster.pkl"
 )
@@ -19,4 +22,5 @@ document = "ThinkPad X1 Hybridは使用するCPUがx86(インテルCore iなど)
 for line in document.split("\n"):
     sentences.append(tagger.parse(line).strip().split())
 scdv.get_probability_word_vectors(sentences)
-print(scdv.make_gwbowv(sentences))
+vector = scdv.make_gwbowv(sentences)
+print(vector)
