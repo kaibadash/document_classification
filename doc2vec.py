@@ -49,7 +49,7 @@ for file_path in files:
     sentences.append(words)
 
 scdv.get_probability_word_vectors(sentences)
-doc_vectors = scdv.make_gwbowv(sentences) # 文章ごとのvectorが得られる
+doc_vectors = scdv.make_gwbowv(sentences) # カテゴリ, vectors の配列
 print("doc_vectorss %d, sentences %d, shape:%s" % (len(doc_vectors), len(sentences), doc_vectors.shape))
 pickle.dump(categories, open("model/categories.pkl", "wb"))
 pickle.dump(doc_vectors, open("model/doc_vectors.pkl", "wb"))

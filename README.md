@@ -24,6 +24,13 @@ python learn_word2vec.py
 ls model/
 ```
 
+## Generate document vectors
+
+```bash
+python word2vec.py
+ls model/
+```
+
 ## Generate class model
 
 ```bash
