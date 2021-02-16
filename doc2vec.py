@@ -13,7 +13,6 @@ from document import Document
 
 # ドキュメントのvectorを計算する
 samples = 0 # n分の1をサンプルとする。0だと全部が対象
-tagger = MeCab.Tagger('-Owakati')
 model = pickle.load(open("model/model.pkl", "rb"))
 scdv = SparseCompositeDocumentVectors(
     model,
@@ -24,7 +23,8 @@ scdv = SparseCompositeDocumentVectors(
 )
 
 files = glob.glob("tmp/text/**/*.txt")
-tagger = MeCab.Tagger('-Owakati')
+tagger = MeCab.Tagger('-Owakati -d /usr/local/lib/mecab/dic/mecab-ipadic-neologd')
+tagger.parse("")
 categories = []
 sentences = [] # 文章ごとの単語の配列
 df = pd.DataFrame()
@@ -45,7 +45,15 @@ for file_path in files:
     for line in lines:
         if line.rstrip() == "":
             continue
-        words.extend(tagger.parse(line).strip().split())
+        node = tagger.parseToNode(line).next
+        while node:
+            cat = node.feature.split(",")[0]
+            if cat == "記号":
+                node = node.next
+                continue
+            # 基本形を使う
+            words.append(node.feature.split(",")[6])
+            node = node.next
     sentences.append(words)
 
 scdv.get_probability_word_vectors(sentences)
