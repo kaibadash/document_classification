@@ -26,7 +26,7 @@ scdv = SparseCompositeDocumentVectors(
 files = glob.glob("tmp/text/**/*.txt")
 tagger = MeCab.Tagger('-Owakati')
 categories = []
-vectors = [] # cluster数 * 次元の配列の配列
+sentences = [] # 文章ごとの単語の配列
 df = pd.DataFrame()
 for file_path in files:
     # 少ないデータで試す
@@ -37,25 +37,19 @@ for file_path in files:
     with open(file_path, 'r') as file:
         text = file.read()
     lines = text.split("\n")
+    # Remove gabages
     lines.pop(0)
     lines.pop(0)
     categories += [file_path.split("/")[-2]]
-    sentences = []
+    words = []
     for line in lines:
         if line.rstrip() == "":
             continue
-        sentences.append(tagger.parse(line).strip().split())
-    scdv.get_probability_word_vectors(sentences)
-    doc_vector = scdv.make_gwbowv(sentences)
-    print("doc_vectors %d" % (len(doc_vector)))
-    print(doc_vector)
-    vectors += [doc_vector]
+        words.extend(tagger.parse(line).strip().split())
+    sentences.append(words)
 
-print("categories %d vectors %d" % (len(categories), len(vectors)))
-df = pd.DataFrame(
-    data={'category': categories, 'vectors': vectors},
-    columns=['category', 'vectors']
-)
-print(df)
-
-pickle.dump(df, open("model/vectors.pkl", "wb"))
+scdv.get_probability_word_vectors(sentences)
+doc_vectors = scdv.make_gwbowv(sentences) # 文章ごとのvectorが得られる
+print("doc_vectorss %d, sentences %d, shape:%s" % (len(doc_vectors), len(sentences), doc_vectors.shape))
+pickle.dump(categories, open("model/categories.pkl", "wb"))
+pickle.dump(doc_vectors, open("model/doc_vectors.pkl", "wb"))
