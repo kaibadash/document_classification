@@ -12,7 +12,7 @@ from sklearn.metrics import accuracy_score
 from document import Document
 
 # ドキュメントのvectorを計算する
-
+samples = 0 # n分の1をサンプルとする。0だと全部が対象
 tagger = MeCab.Tagger('-Owakati')
 model = pickle.load(open("model/model.pkl", "rb"))
 scdv = SparseCompositeDocumentVectors(
@@ -30,7 +30,7 @@ sentences = [] # 文章ごとの単語の配列
 df = pd.DataFrame()
 for file_path in files:
     # 少ないデータで試す
-    if random.randrange(100) != 0:
+    if samples != 0 and random.randrange(samples) != 0:
         continue
     print("load: " + file_path)
 

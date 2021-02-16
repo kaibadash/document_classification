@@ -23,4 +23,4 @@ clf = SVC()
 clf.fit(x_train, y_train)
 
 y_pred = clf.predict(x_test)
-print("正解率 = " , accuracy_score(y_test, y_pred))
+print("accuracy_score = " , accuracy_score(y_test, y_pred))
