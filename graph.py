@@ -26,7 +26,9 @@ tsne.fit(doc_vectors)
 df = pd.DataFrame(tsne.embedding_[:, 0], columns=['x'])
 df['y'] = pd.DataFrame(tsne.embedding_[:, 1])
 df['class'] = categories
+
 graph = sns.lmplot(
-    data=df, x='x', y='y', hue='class', fit_reg=False, size=8
+    data=df, x='x', y='y', hue='class', fit_reg=False
 )
+graph.savefig("/tmp/out.png")
 plt.show()
